@@ -1,0 +1,304 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+import matplotlib.animation as animation
+
+class ElementalCellularAutomaton:
+    # Element states - simple integer constants to represent different cell types
+    EMPTY = 0
+    WALL = 1
+    SAND = 2
+    WOOD = 3
+    FIRE = 4
+    DARK_SMOKE = 5
+    LIGHT_SMOKE = 6
+    
+    def initialize(self, width, height, wall_rule="B678/S2345678", fill_ratio=0.45):
+        """
+        Initialize the cellular automaton with the given dimensions.
+        
+        Args:
+            width: Width of the grid
+            height: Height of the grid
+            wall_rule: Rule string for wall generation (Conway-like format)
+            fill_ratio: Initial ratio of filled cells for wall generation
+        """
+        self.width = width
+        self.height = height
+        self.grid = np.zeros((height, width), dtype=int)
+        self.next_grid = np.zeros((height, width), dtype=int)
+        self.wall_rule = self.parse_rule(wall_rule)
+        self.fill_ratio = fill_ratio
+        self.smoke_lifetime = np.zeros((height, width), dtype=float) 
+        self.max_smoke_lifetime = 30  
+        
+        # Create the initial grid with walls
+        self.generate_cave_walls()
+        
+        # Add a solid border around the grid
+        self.add_border()
+    
+
+    def parse_rule(self, rule_string):
+        """Parse Conway-like rule string (e.g., 'B678/S2345678')"""
+        parts = rule_string.split('/')
+        birth = [int(c) for c in parts[0][1:]]
+        survival = [int(c) for c in parts[1][1:]]
+        return {'birth': birth, 'survival': survival}
+    
+    def generate_cave_walls(self):
+        """Generate cave walls using the specified CA rule"""
+        # Initialize random grid with walls and empty spaces
+        self.grid = np.random.choice(
+            [self.EMPTY, self.WALL], 
+            size=(self.height, self.width), 
+            p=[1-self.fill_ratio, self.fill_ratio]
+        )
+        
+        # Apply the wall generation rule until stabilization
+        stable = False
+        max_iterations = 15  # Usually stabilizes within 15 iterations
+        iterations = 0
+        
+        while not stable and iterations < max_iterations:
+            stable = True
+            self.next_grid = np.copy(self.grid)
+            
+            for y in range(1, self.height - 1):
+                for x in range(1, self.width - 1):
+                    neighbors = self.count_neighbors(x, y, self.WALL)
+                    
+                    # Apply the rule
+                    if self.grid[y, x] == self.WALL:
+                        if neighbors not in self.wall_rule['survival']:
+                            self.next_grid[y, x] = self.EMPTY
+                            stable = False
+                    else:  # EMPTY
+                        if neighbors in self.wall_rule['birth']:
+                            self.next_grid[y, x] = self.WALL
+                            stable = False
+            
+            self.grid = np.copy(self.next_grid)
+            iterations += 1
+    
+    def add_border(self):
+        """Add a solid border around the grid"""
+        self.grid[0, :] = self.WALL
+        self.grid[-1, :] = self.WALL
+        self.grid[:, 0] = self.WALL
+        self.grid[:, -1] = self.WALL
+    
+    def count_neighbors(self, x, y, state):
+        """Count neighbors of a specific state"""
+        count = 0
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                if self.grid[y + dy, x + dx] == state:
+                    count += 1
+        return count
+    
+    def update(self):
+        """Update the grid for one generation"""
+        self.next_grid = np.copy(self.grid)
+        next_smoke_lifetime = np.copy(self.smoke_lifetime)
+        
+
+        for y in range(1, self.height - 1):
+            for x in range(1, self.width - 1):
+                if self.grid[y, x] in [self.DARK_SMOKE, self.LIGHT_SMOKE]:
+                    self.process_smoke(x, y, next_smoke_lifetime)
+        
+        for y in range(1, self.height - 1):
+            for x in range(1, self.width - 1):
+                if self.grid[y, x] == self.FIRE:
+                    self.process_fire(x, y)
+        
+        for y in range(self.height - 2, 0, -1):
+            for x in range(1, self.width - 1):
+                if self.grid[y, x] == self.SAND:
+                    self.process_sand(x, y)
+                elif self.grid[y, x] == self.WOOD:
+                    self.process_wood(x, y)
+        
+        self.grid = np.copy(self.next_grid)
+        self.smoke_lifetime = next_smoke_lifetime
+    
+    def process_sand(self, x, y):
+        """Process sand movement"""
+        # Check directly below
+        if self.grid[y + 1, x] == self.EMPTY:
+            self.next_grid[y, x] = self.EMPTY
+            self.next_grid[y + 1, x] = self.SAND
+        # Check diagonally (left and right)
+        elif self.grid[y + 1, x - 1] == self.EMPTY and self.grid[y + 1, x + 1] == self.EMPTY:
+            # Random choice between left and right diagonal
+            direction = np.random.choice([-1, 1])
+            self.next_grid[y, x] = self.EMPTY
+            self.next_grid[y + 1, x + direction] = self.SAND
+        # Check left diagonal only
+        elif self.grid[y + 1, x - 1] == self.EMPTY:
+            self.next_grid[y, x] = self.EMPTY
+            self.next_grid[y + 1, x - 1] = self.SAND
+        # Check right diagonal only
+        elif self.grid[y + 1, x + 1] == self.EMPTY:
+            self.next_grid[y, x] = self.EMPTY
+            self.next_grid[y + 1, x + 1] = self.SAND
+    
+    def process_wood(self, x, y):
+        """Process wood movement and burning"""
+        # Check if wood is next to fire
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                if self.grid[y + dy, x + dx] == self.FIRE:
+                    self.next_grid[y, x] = self.FIRE
+                    return
+        
+        # If not burning, check for falling
+        if self.grid[y + 1, x] == self.EMPTY:
+            self.next_grid[y, x] = self.EMPTY
+            self.next_grid[y + 1, x] = self.WOOD
+    
+    def process_fire(self, x, y):
+        """Process fire movement and transformation"""
+        # Try to move downward randomly
+        directions = [(1, 0), (1, -1), (1, 1)]
+        np.random.shuffle(directions)
+        
+        for dy, dx in directions:
+            nx, ny = x + dx, y + dy
+            if self.grid[ny, nx] == self.EMPTY:
+                self.next_grid[y, x] = self.EMPTY
+                self.next_grid[ny, nx] = self.FIRE
+                return
+            elif self.grid[ny, nx] == self.WOOD:
+                # Transform to dark smoke if it burns something
+                self.next_grid[y, x] = self.DARK_SMOKE
+                self.smoke_lifetime[y, x] = self.max_smoke_lifetime
+                # The wood will catch fire in the next iteration
+                return
+        
+        # If fire can't move down, transform to light smoke
+        self.next_grid[y, x] = self.LIGHT_SMOKE
+        self.smoke_lifetime[y, x] = self.max_smoke_lifetime
+    
+    def process_smoke(self, x, y, next_smoke_lifetime):
+        """Process smoke movement and lifetime"""
+        smoke_type = self.grid[y, x]
+        
+        # Check if smoke has expired
+        if self.smoke_lifetime[y, x] <= 0:
+            self.next_grid[y, x] = self.EMPTY
+            return
+        
+        # Decrement smoke lifetime
+        next_smoke_lifetime[y, x] = self.smoke_lifetime[y, x] - 0.5
+        
+        # Try to move upward
+        directions = [(-1, 0), (-1, -1), (-1, 1)]
+        np.random.shuffle(directions)
+        
+        for dy, dx in directions:
+            nx, ny = x + dx, y + dy
+            if self.grid[ny, nx] == self.EMPTY:
+                self.next_grid[y, x] = self.EMPTY
+                self.next_grid[ny, nx] = smoke_type
+                next_smoke_lifetime[y, x] = 0
+                next_smoke_lifetime[ny, nx] = self.smoke_lifetime[y, x]
+                return
+        
+        # If can't move up, try sideways
+        sideways = [(0, -1), (0, 1)]
+        np.random.shuffle(sideways)
+        
+        for dy, dx in sideways:
+            nx, ny = x + dx, y + dy
+            if self.grid[ny, nx] == self.EMPTY:
+                self.next_grid[y, x] = self.EMPTY
+                self.next_grid[ny, nx] = smoke_type
+                next_smoke_lifetime[y, x] = 0
+                next_smoke_lifetime[ny, nx] = self.smoke_lifetime[y, x]
+                return
+    
+    def add_element(self, x, y, element):
+        """Add an element to the grid at the specified position"""
+        if 0 <= x < self.width and 0 <= y < self.height:
+            if self.grid[y, x] == self.EMPTY or element == self.EMPTY:
+                self.grid[y, x] = element
+    
+    def get_grid(self):
+        """Return the current grid"""
+        return self.grid
+
+
+def visualize_simulation(ca, frames=50):
+    """Create an animation of the cellular automaton"""
+    fig, ax = plt.subplots(figsize=(10, 10))
+    
+    # Define colors for each element
+    cmap = colors.ListedColormap(['black', 'gray', 'yellow', 'brown', 'red', 'darkgray', 'lightgray'])
+    bounds = [ca.EMPTY - 0.5, ca.WALL - 0.5, ca.SAND - 0.5, ca.WOOD - 0.5, 
+              ca.FIRE - 0.5, ca.DARK_SMOKE - 0.5, ca.LIGHT_SMOKE - 0.5, ca.LIGHT_SMOKE + 0.5]
+    norm = colors.BoundaryNorm(bounds, cmap.N)
+    
+    img = ax.imshow(ca.get_grid(), cmap=cmap, norm=norm, interpolation='nearest')
+    
+    # Add a colorbar with element labels
+    cbar = fig.colorbar(img, ax=ax, ticks=[ca.EMPTY, ca.WALL, ca.SAND, ca.WOOD, ca.FIRE, ca.DARK_SMOKE, ca.LIGHT_SMOKE])
+    cbar.ax.set_yticklabels(['Empty', 'Wall', 'Sand', 'Wood', 'Fire', 'Dark Smoke', 'Light Smoke'])
+    
+    element_buttons = []
+    current_element = [ca.SAND] 
+    
+    def update(frame):
+        ca.update()
+        img.set_array(ca.get_grid())
+        return [img]
+    
+    def onclick(event):
+        if event.xdata is not None and event.ydata is not None:
+            x, y = int(event.xdata), int(event.ydata)
+            ca.add_element(x, y, current_element[0])
+            img.set_array(ca.get_grid())
+            fig.canvas.draw_idle()
+    
+    def create_element_button(element, label, color, x_pos):
+        button_ax = fig.add_axes([x_pos, 0.01, 0.1, 0.05])
+        button = plt.Button(button_ax, label, color=color)
+        
+        def on_click(event):
+            current_element[0] = element
+            for btn in element_buttons:
+                btn.color = 'lightgray'
+            button.color = color
+            fig.canvas.draw_idle()
+        
+        button.on_clicked(on_click)
+        return button
+    
+    # Add element buttons
+    element_buttons.append(create_element_button(ca.SAND, 'Sand', 'yellow', 0.1))
+    element_buttons.append(create_element_button(ca.WOOD, 'Wood', 'brown', 0.3))
+    element_buttons.append(create_element_button(ca.FIRE, 'Fire', 'red', 0.5))
+    element_buttons.append(create_element_button(ca.EMPTY, 'Eraser', 'black', 0.7))
+    
+    cid = fig.canvas.mpl_connect('button_press_event', onclick)
+    
+    ani = animation.FuncAnimation(fig, update, frames=frames, interval=100, blit=True)
+    plt.title('Multi-State Cellular Automaton Simulation')
+    plt.show()
+
+def run_simulation():
+    """Run the simulation with the specified parameters"""
+    # Create the cellular automaton
+    ca = ElementalCellularAutomaton()
+    ca.initialize(width=80, height=60, wall_rule="B678/S2345678", fill_ratio=0.45)
+    
+    # Visualize the simulation
+    visualize_simulation(ca, frames=500)
+
+
+run_simulation()
